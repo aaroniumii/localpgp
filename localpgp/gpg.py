@@ -92,13 +92,10 @@ class GPGHandler:
             args.extend(["--sign", "--default-key", signing_fpr])
         args.extend(self._recipient_args(recipients))
 
-        stdin_data: Optional[bytes] = None
         if signing_fpr and passphrase is not None:
-            args.extend(["--passphrase-fd", "0"])
-            stdin_data = passphrase.encode()
+            args.extend(["--passphrase", passphrase])
 
-        payload = (stdin_data or b"") + text.encode()
-        process = self._run(args, stdin=payload)
+        process = self._run(args, stdin=text.encode())
         return (
             process.returncode,
             process.stdout.decode(errors="replace"),
@@ -115,11 +112,11 @@ class GPGHandler:
             "--pinentry-mode",
             "loopback",
             "--decrypt",
-            "--passphrase-fd",
-            "0",
         ]
-        stdin_data = (passphrase or "").encode() + armored.encode()
-        process = self._run(args, stdin=stdin_data)
+        if passphrase is not None:
+            args.extend(["--passphrase", passphrase])
+
+        process = self._run(args, stdin=armored.encode())
         return (
             process.returncode,
             process.stdout.decode(errors="replace"),
@@ -156,13 +153,11 @@ class GPGHandler:
         insert_pos = args.index(src_path)
         args[insert_pos:insert_pos] = self._recipient_args(recipients)
 
-        stdin_data: Optional[bytes] = None
         if signing_fpr and passphrase is not None:
             out_index = args.index("-o")
-            args[out_index:out_index] = ["--passphrase-fd", "0"]
-            stdin_data = passphrase.encode()
+            args[out_index:out_index] = ["--passphrase", passphrase]
 
-        process = self._run(args, stdin=stdin_data)
+        process = self._run(args)
         return process.returncode, process.stderr.decode(errors="replace")
 
     def decrypt_file(self, src_path: str, dst_path: str, passphrase: Optional[str]) -> Tuple[int, str]:
@@ -175,13 +170,12 @@ class GPGHandler:
             "--pinentry-mode",
             "loopback",
             "--decrypt",
-            "-o",
-            dst_path,
-            src_path,
-            "--passphrase-fd",
-            "0",
         ]
-        process = self._run(args, stdin=(passphrase or "").encode())
+        if passphrase is not None:
+            args.extend(["--passphrase", passphrase])
+        args.extend(["-o", dst_path, src_path])
+
+        process = self._run(args)
         return process.returncode, process.stderr.decode(errors="replace")
 
 
