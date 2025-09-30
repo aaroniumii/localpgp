@@ -32,6 +32,8 @@ class AppState:
     keys: List[KeyInfo] = field(default_factory=list)
     directory: Optional[Path] = None
     delete_original: bool = True
+    selected_files: List[Path] = field(default_factory=list)
+    include_subdirectories: bool = True
 
 
 class EncryptorApp:
@@ -61,8 +63,14 @@ class EncryptorApp:
 
         self.signing_key_var = tk.StringVar(value=default_display)
         self.delete_original_var = tk.BooleanVar(value=self.state.delete_original)
+        self.delete_original_var.trace_add("write", lambda *_: self._on_delete_original_changed())
         self.directory_var = tk.StringVar(value="")
         self.recipient_vars: List[RecipientSelection] = []
+        self.include_subdirs_var = tk.BooleanVar(value=self.state.include_subdirectories)
+        self.include_subdirs_var.trace_add("write", lambda *_: self._on_include_subdirectories_changed())
+
+        self._on_delete_original_changed()
+        self._on_include_subdirectories_changed()
 
     def _build_layout(self) -> None:
         self.root.columnconfigure(0, weight=1)
@@ -156,7 +164,7 @@ class EncryptorApp:
         files_frame.rowconfigure(3, weight=1)
         notebook.add(files_frame, text="Archivos")
 
-        ttk.Label(files_frame, text="Directorio de trabajo:").grid(row=0, column=0, sticky="w")
+        ttk.Label(files_frame, text="Directorio de trabajo:").grid(row=0, column=0, columnspan=2, sticky="w")
 
         dir_entry = ttk.Entry(files_frame, textvariable=self.directory_var)
         dir_entry.grid(row=1, column=0, columnspan=2, sticky="ew", pady=4)
@@ -164,14 +172,49 @@ class EncryptorApp:
         browse_button = ttk.Button(files_frame, text="Seleccionar...", command=self.select_directory)
         browse_button.grid(row=1, column=2, sticky="ew", padx=(8, 0))
 
-        self.encrypt_dir_button = ttk.Button(files_frame, text="Cifrar directorio", command=self.encrypt_files)
-        self.encrypt_dir_button.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        include_check = ttk.Checkbutton(
+            files_frame,
+            text="Incluir subdirectorios",
+            variable=self.include_subdirs_var,
+            command=self._on_include_subdirectories_changed,
+        )
+        include_check.grid(row=2, column=0, columnspan=2, sticky="w")
 
-        self.decrypt_dir_button = ttk.Button(files_frame, text="Descifrar directorio", command=self.decrypt_files)
-        self.decrypt_dir_button.grid(row=2, column=1, sticky="ew", pady=(12, 0))
+        self.encrypt_dir_button = ttk.Button(files_frame, text="Cifrar directorio", command=self.encrypt_directory)
+        self.encrypt_dir_button.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+
+        self.decrypt_dir_button = ttk.Button(files_frame, text="Descifrar directorio", command=self.decrypt_directory)
+        self.decrypt_dir_button.grid(row=3, column=1, sticky="ew", pady=(12, 0))
+
+        ttk.Label(files_frame, text="Archivos específicos:").grid(row=4, column=0, columnspan=2, sticky="w", pady=(12, 0))
+
+        self.files_listbox = tk.Listbox(files_frame, height=6, selectmode=tk.EXTENDED, exportselection=False)
+        self.files_listbox.grid(row=5, column=0, columnspan=2, sticky="nsew", pady=(4, 0))
+
+        files_scroll = ttk.Scrollbar(files_frame, orient="vertical", command=self.files_listbox.yview)
+        files_scroll.grid(row=5, column=2, sticky="ns")
+        self.files_listbox.configure(yscrollcommand=files_scroll.set)
+
+        add_button = ttk.Button(files_frame, text="Añadir archivos...", command=self.select_files)
+        add_button.grid(row=6, column=0, sticky="ew", pady=(8, 0))
+
+        remove_button = ttk.Button(files_frame, text="Quitar seleccionados", command=self.remove_selected_files)
+        remove_button.grid(row=6, column=1, sticky="ew", pady=(8, 0))
+
+        clear_button = ttk.Button(files_frame, text="Limpiar lista", command=self.clear_selected_files)
+        clear_button.grid(row=7, column=0, columnspan=2, sticky="ew")
+
+        self.encrypt_files_button = ttk.Button(files_frame, text="Cifrar archivos", command=self.encrypt_selected_files)
+        self.encrypt_files_button.grid(row=8, column=0, sticky="ew", pady=(12, 0))
+
+        self.decrypt_files_button = ttk.Button(files_frame, text="Descifrar archivos", command=self.decrypt_selected_files)
+        self.decrypt_files_button.grid(row=8, column=1, sticky="ew", pady=(12, 0))
 
         files_frame.columnconfigure(0, weight=1)
         files_frame.columnconfigure(1, weight=1)
+        files_frame.rowconfigure(5, weight=1)
+
+        self._refresh_selected_files()
 
         # Pestaña de texto
         text_frame = ttk.Frame(notebook, padding=12)
@@ -264,9 +307,20 @@ class EncryptorApp:
     # ------------------------------------------------------------------
     def _update_buttons_state(self) -> None:
         has_keys = bool(self.state.keys)
-        self.encrypt_dir_button.configure(state=tk.NORMAL if has_keys else tk.DISABLED)
-        # Se permite descifrar aunque no haya claves
-        self.decrypt_dir_button.configure(state=tk.NORMAL)
+        has_directory = self.state.directory is not None
+        has_selected_files = bool(self.state.selected_files)
+
+        self.encrypt_dir_button.configure(state=tk.NORMAL if has_keys and has_directory else tk.DISABLED)
+        # Se permite descifrar aunque no haya claves pero requiere directorio seleccionado
+        self.decrypt_dir_button.configure(state=tk.NORMAL if has_directory else tk.DISABLED)
+
+        self.encrypt_files_button.configure(state=tk.NORMAL if has_keys and has_selected_files else tk.DISABLED)
+        self.decrypt_files_button.configure(state=tk.NORMAL if has_selected_files else tk.DISABLED)
+
+    def _refresh_selected_files(self) -> None:
+        self.files_listbox.delete(0, tk.END)
+        for path in self.state.selected_files:
+            self.files_listbox.insert(tk.END, str(path))
 
     def _poll_queue(self) -> None:
         try:
@@ -314,6 +368,12 @@ class EncryptorApp:
         selected = filedialog.askdirectory()
         return Path(selected) if selected else None
 
+    def _on_delete_original_changed(self) -> None:
+        self.state.delete_original = self.delete_original_var.get()
+
+    def _on_include_subdirectories_changed(self) -> None:
+        self.state.include_subdirectories = self.include_subdirs_var.get()
+
     def copy_to_clipboard(self, text: str) -> None:
         if not text:
             messagebox.showinfo("Portapapeles", "No hay texto para copiar.")
@@ -335,8 +395,39 @@ class EncryptorApp:
         if directory:
             self.state.directory = directory
             self.directory_var.set(str(directory))
+            self._update_buttons_state()
 
-    def encrypt_files(self) -> None:
+    def select_files(self) -> None:
+        files = filedialog.askopenfilenames(title="Selecciona archivos")
+        if not files:
+            return
+        existing = {str(path) for path in self.state.selected_files}
+        for file_path in files:
+            path = Path(file_path)
+            if str(path) not in existing:
+                self.state.selected_files.append(path)
+                existing.add(str(path))
+        self._refresh_selected_files()
+        self._update_buttons_state()
+
+    def remove_selected_files(self) -> None:
+        selection = list(self.files_listbox.curselection())
+        if not selection:
+            return
+        for index in reversed(selection):
+            if 0 <= index < len(self.state.selected_files):
+                del self.state.selected_files[index]
+        self._refresh_selected_files()
+        self._update_buttons_state()
+
+    def clear_selected_files(self) -> None:
+        if not self.state.selected_files:
+            return
+        self.state.selected_files.clear()
+        self._refresh_selected_files()
+        self._update_buttons_state()
+
+    def encrypt_directory(self) -> None:
         recipients = self._get_selected_recipients()
         if not recipients:
             messagebox.showerror("Sin destinatarios", "Seleccione al menos un destinatario.")
@@ -357,16 +448,71 @@ class EncryptorApp:
             if not confirm:
                 return
 
-        self._require_thread(self._encrypt_directory_worker, recipients, signing_fpr, passphrase)
+        include_subdirs = self.include_subdirs_var.get()
+        delete_original = self.delete_original_var.get()
+        self._require_thread(
+            self._encrypt_directory_worker,
+            recipients,
+            signing_fpr,
+            passphrase,
+            delete_original,
+            include_subdirs,
+        )
 
-    def decrypt_files(self) -> None:
+    def decrypt_directory(self) -> None:
         if not self.state.directory:
             messagebox.showerror("Sin directorio", "Seleccione un directorio primero.")
             return
         passphrase = self._ask_passphrase("Introduce la passphrase para descifrar:")
         if passphrase is None:
             return
-        self._require_thread(self._decrypt_directory_worker, passphrase)
+        include_subdirs = self.include_subdirs_var.get()
+        self._require_thread(self._decrypt_directory_worker, passphrase, include_subdirs)
+
+    def encrypt_selected_files(self) -> None:
+        recipients = self._get_selected_recipients()
+        if not recipients:
+            messagebox.showerror("Sin destinatarios", "Seleccione al menos un destinatario.")
+            return
+        if not self.state.selected_files:
+            messagebox.showerror("Sin archivos", "Seleccione uno o más archivos para cifrar.")
+            return
+
+        signing_fpr = self._selected_signing_fingerprint()
+        passphrase = None
+        if signing_fpr:
+            passphrase = self._ask_passphrase("Introduce la passphrase para firmar:")
+            if passphrase is None:
+                return
+
+        if self.delete_original_var.get():
+            confirm = messagebox.askyesno("Confirmar", "¿Eliminar los archivos originales tras cifrar?")
+            if not confirm:
+                return
+
+        delete_original = self.delete_original_var.get()
+        self._require_thread(
+            self._encrypt_files_worker,
+            list(self.state.selected_files),
+            recipients,
+            signing_fpr,
+            passphrase,
+            delete_original,
+        )
+
+    def decrypt_selected_files(self) -> None:
+        if not self.state.selected_files:
+            messagebox.showerror("Sin archivos", "Seleccione uno o más archivos para descifrar.")
+            return
+        passphrase = self._ask_passphrase("Introduce la passphrase para descifrar:")
+        if passphrase is None:
+            return
+
+        self._require_thread(
+            self._decrypt_files_worker,
+            list(self.state.selected_files),
+            passphrase,
+        )
 
     def encrypt_text(self) -> None:
         text = self.text_input.get("1.0", tk.END).strip()
@@ -464,7 +610,14 @@ class EncryptorApp:
     # ------------------------------------------------------------------
     # Trabajadores en segundo plano
     # ------------------------------------------------------------------
-    def _encrypt_directory_worker(self, recipients: Sequence[str], signing_fpr: Optional[str], passphrase: Optional[str]) -> None:
+    def _encrypt_directory_worker(
+        self,
+        recipients: Sequence[str],
+        signing_fpr: Optional[str],
+        passphrase: Optional[str],
+        delete_original: bool,
+        include_subdirectories: bool,
+    ) -> None:
         self._queue.put(("status", "Estado: cifrando archivos..."))
         directory = self.state.directory
         if directory is None:
@@ -472,10 +625,15 @@ class EncryptorApp:
             return
 
         files: List[Path] = []
-        for root_dir, _, filenames in os.walk(directory):
-            for filename in filenames:
-                if not filename.endswith(".gpg"):
-                    files.append(Path(root_dir) / filename)
+        if include_subdirectories:
+            for root_dir, _, filenames in os.walk(directory):
+                for filename in filenames:
+                    if not filename.endswith(".gpg"):
+                        files.append(Path(root_dir) / filename)
+        else:
+            for item in directory.iterdir():
+                if item.is_file() and not item.name.endswith(".gpg"):
+                    files.append(item)
 
         self._queue.put(("progress_max", str(len(files) or 1)))
 
@@ -484,7 +642,7 @@ class EncryptorApp:
             code, err = self.state.gpg.encrypt_file(str(path), str(out_path), recipients, signing_fpr, passphrase)
             if code == 0:
                 self._queue.put(("log", f"Cifrado: {path} → {out_path}"))
-                if self.delete_original_var.get():
+                if delete_original:
                     try:
                         path.unlink()
                         self._queue.put(("log", f"Eliminado original: {path}"))
@@ -496,7 +654,7 @@ class EncryptorApp:
 
         self._queue.put(("status", "Estado: cifrado finalizado"))
 
-    def _decrypt_directory_worker(self, passphrase: str) -> None:
+    def _decrypt_directory_worker(self, passphrase: str, include_subdirectories: bool) -> None:
         self._queue.put(("status", "Estado: descifrando archivos..."))
         directory = self.state.directory
         if directory is None:
@@ -504,14 +662,89 @@ class EncryptorApp:
             return
 
         files: List[Path] = []
-        for root_dir, _, filenames in os.walk(directory):
-            for filename in filenames:
-                if filename.endswith(".gpg"):
-                    files.append(Path(root_dir) / filename)
+        if include_subdirectories:
+            for root_dir, _, filenames in os.walk(directory):
+                for filename in filenames:
+                    if filename.endswith(".gpg"):
+                        files.append(Path(root_dir) / filename)
+        else:
+            for item in directory.iterdir():
+                if item.is_file() and item.name.endswith(".gpg"):
+                    files.append(item)
 
         self._queue.put(("progress_max", str(len(files) or 1)))
 
         for path in files:
+            out_path = path.with_suffix("")
+            code, err = self.state.gpg.decrypt_file(str(path), str(out_path), passphrase)
+            if code == 0:
+                self._queue.put(("log", f"Descifrado: {path} → {out_path}"))
+                try:
+                    path.unlink()
+                    self._queue.put(("log", f"Eliminado cifrado: {path}"))
+                except OSError as exc:
+                    self._queue.put(("log", f"No se pudo eliminar {path}: {exc}"))
+            else:
+                self._queue.put(("log", f"Error descifrando {path}: {err.strip()}"))
+            self._queue.put(("progress_step", "1"))
+
+        self._queue.put(("status", "Estado: descifrado finalizado"))
+
+    def _encrypt_files_worker(
+        self,
+        files: Sequence[Path],
+        recipients: Sequence[str],
+        signing_fpr: Optional[str],
+        passphrase: Optional[str],
+        delete_original: bool,
+    ) -> None:
+        self._queue.put(("status", "Estado: cifrando archivos..."))
+        normalized: List[Path] = [Path(path) for path in files]
+        self._queue.put(("progress_max", str(len(normalized) or 1)))
+
+        for raw_path in normalized:
+            path = Path(raw_path)
+            if not path.exists() or not path.is_file():
+                self._queue.put(("log", f"No se encontró el archivo: {path}"))
+                self._queue.put(("progress_step", "1"))
+                continue
+            if path.name.endswith(".gpg"):
+                self._queue.put(("log", f"Omitido (ya cifrado): {path}"))
+                self._queue.put(("progress_step", "1"))
+                continue
+
+            out_path = path.with_suffix(path.suffix + ".gpg")
+            code, err = self.state.gpg.encrypt_file(str(path), str(out_path), recipients, signing_fpr, passphrase)
+            if code == 0:
+                self._queue.put(("log", f"Cifrado: {path} → {out_path}"))
+                if delete_original:
+                    try:
+                        path.unlink()
+                        self._queue.put(("log", f"Eliminado original: {path}"))
+                    except OSError as exc:
+                        self._queue.put(("log", f"No se pudo eliminar {path}: {exc}"))
+            else:
+                self._queue.put(("log", f"Error cifrando {path}: {err.strip()}"))
+            self._queue.put(("progress_step", "1"))
+
+        self._queue.put(("status", "Estado: cifrado finalizado"))
+
+    def _decrypt_files_worker(self, files: Sequence[Path], passphrase: str) -> None:
+        self._queue.put(("status", "Estado: descifrando archivos..."))
+        normalized: List[Path] = [Path(path) for path in files]
+        self._queue.put(("progress_max", str(len(normalized) or 1)))
+
+        for raw_path in normalized:
+            path = Path(raw_path)
+            if not path.exists() or not path.is_file():
+                self._queue.put(("log", f"No se encontró el archivo: {path}"))
+                self._queue.put(("progress_step", "1"))
+                continue
+            if not path.name.endswith(".gpg"):
+                self._queue.put(("log", f"Omitido (no es .gpg): {path}"))
+                self._queue.put(("progress_step", "1"))
+                continue
+
             out_path = path.with_suffix("")
             code, err = self.state.gpg.decrypt_file(str(path), str(out_path), passphrase)
             if code == 0:
