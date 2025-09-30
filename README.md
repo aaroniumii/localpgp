@@ -6,6 +6,7 @@ LocalPGP es una aplicación de escritorio ligera escrita en Python que facilita 
 
 - **Gestión de claves**: detecta las claves públicas disponibles en el llavero local e incluye herramientas para importar nuevas claves.
 - **Cifrado y descifrado de archivos**: procesa directorios completos, cifra sus contenidos y opcionalmente elimina los originales tras generar la versión cifrada.
+- **Firmado y verificación**: genera firmas ASCII para archivos o textos y comprueba su validez de forma local.
 - **Cifrado y descifrado de texto**: permite introducir texto libre, cifrarlo para uno o varios destinatarios y copiar el resultado en formato ASCII armor.
 - **Registro y seguimiento**: muestra el progreso de las operaciones y un registro de eventos para diagnosticar problemas.
 
@@ -41,8 +42,8 @@ Al iniciar se mostrará la ventana principal con las siguientes secciones:
 
 - **Clave de firma**: selecciona la clave con la que quieres firmar los mensajes (opcional).
 - **Destinatarios**: marca las claves públicas que recibirán los mensajes cifrados.
-- **Pestaña Archivos**: elige un directorio y pulsa "Cifrar" o "Descifrar" según la operación que necesites.
-- **Pestaña Texto**: introduce texto plano para cifrarlo o pega texto cifrado para descifrarlo.
+- **Pestaña Archivos**: elige un directorio y pulsa "Cifrar", "Firmar", "Descifrar" o "Verificar" según la operación que necesites.
+- **Pestaña Texto**: introduce texto plano para cifrarlo o firmarlo, o pega texto cifrado/firmado para descifrarlo o verificarlo.
 - **Registro**: revisa el progreso y los mensajes de diagnóstico.
 
 Durante las operaciones que requieran passphrase, la aplicación solicitará la contraseña de la clave privada correspondiente.
