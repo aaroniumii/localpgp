@@ -210,6 +210,12 @@ class EncryptorApp:
         self.decrypt_files_button = ttk.Button(files_frame, text="Descifrar archivos", command=self.decrypt_selected_files)
         self.decrypt_files_button.grid(row=8, column=1, sticky="ew", pady=(12, 0))
 
+        self.sign_files_button = ttk.Button(files_frame, text="Firmar archivos", command=self.sign_selected_files)
+        self.sign_files_button.grid(row=9, column=0, sticky="ew", pady=(12, 0))
+
+        self.verify_files_button = ttk.Button(files_frame, text="Verificar firmas", command=self.verify_selected_files)
+        self.verify_files_button.grid(row=9, column=1, sticky="ew", pady=(12, 0))
+
         files_frame.columnconfigure(0, weight=1)
         files_frame.columnconfigure(1, weight=1)
         files_frame.rowconfigure(5, weight=1)
@@ -221,7 +227,8 @@ class EncryptorApp:
         text_frame.columnconfigure(0, weight=1)
         text_frame.columnconfigure(1, weight=1)
         text_frame.rowconfigure(1, weight=1)
-        text_frame.rowconfigure(4, weight=1)
+        text_frame.rowconfigure(5, weight=1)
+        text_frame.rowconfigure(8, weight=1)
         notebook.add(text_frame, text="Texto")
 
         ttk.Label(text_frame, text="Texto a cifrar:").grid(row=0, column=0, sticky="w")
@@ -237,27 +244,33 @@ class EncryptorApp:
         clear_button = ttk.Button(text_frame, text="Limpiar campos", command=self.clear_text_fields)
         clear_button.grid(row=2, column=2, sticky="ew")
 
-        ttk.Label(text_frame, text="Resultado cifrado:").grid(row=3, column=0, sticky="w")
+        sign_text_button = ttk.Button(text_frame, text="Firmar texto", command=self.sign_text)
+        sign_text_button.grid(row=3, column=0, sticky="ew")
+
+        verify_text_button = ttk.Button(text_frame, text="Verificar firma", command=self.verify_text)
+        verify_text_button.grid(row=3, column=1, sticky="ew")
+
+        ttk.Label(text_frame, text="Resultado cifrado o firmado:").grid(row=4, column=0, sticky="w")
         self.encrypted_output = tk.Text(text_frame, height=8, wrap="word")
-        self.encrypted_output.grid(row=4, column=0, columnspan=3, sticky="nsew", pady=(0, 8))
+        self.encrypted_output.grid(row=5, column=0, columnspan=3, sticky="nsew", pady=(0, 8))
 
         copy_encrypted = ttk.Button(
             text_frame,
             text="Copiar cifrado",
             command=lambda: self.copy_to_clipboard(self.encrypted_output.get("1.0", tk.END).strip()),
         )
-        copy_encrypted.grid(row=5, column=0, sticky="ew", pady=(0, 8))
+        copy_encrypted.grid(row=6, column=0, sticky="ew", pady=(0, 8))
 
-        ttk.Label(text_frame, text="Resultado descifrado:").grid(row=6, column=0, sticky="w")
+        ttk.Label(text_frame, text="Resultado descifrado o verificado:").grid(row=7, column=0, sticky="w")
         self.decrypted_output = tk.Text(text_frame, height=6, wrap="word")
-        self.decrypted_output.grid(row=7, column=0, columnspan=3, sticky="nsew")
+        self.decrypted_output.grid(row=8, column=0, columnspan=3, sticky="nsew")
 
         copy_decrypted = ttk.Button(
             text_frame,
             text="Copiar texto",
             command=lambda: self.copy_to_clipboard(self.decrypted_output.get("1.0", tk.END).strip()),
         )
-        copy_decrypted.grid(row=8, column=0, sticky="ew", pady=(8, 0))
+        copy_decrypted.grid(row=9, column=0, sticky="ew", pady=(8, 0))
 
     def _build_status_bar(self) -> None:
         status_frame = ttk.Frame(self.main_frame, padding=(0, 12, 0, 0))
@@ -309,6 +322,7 @@ class EncryptorApp:
         has_keys = bool(self.state.keys)
         has_directory = self.state.directory is not None
         has_selected_files = bool(self.state.selected_files)
+        can_sign = self._selected_signing_fingerprint() is not None
 
         self.encrypt_dir_button.configure(state=tk.NORMAL if has_keys and has_directory else tk.DISABLED)
         # Se permite descifrar aunque no haya claves pero requiere directorio seleccionado
@@ -316,6 +330,8 @@ class EncryptorApp:
 
         self.encrypt_files_button.configure(state=tk.NORMAL if has_keys and has_selected_files else tk.DISABLED)
         self.decrypt_files_button.configure(state=tk.NORMAL if has_selected_files else tk.DISABLED)
+        self.sign_files_button.configure(state=tk.NORMAL if can_sign and has_selected_files else tk.DISABLED)
+        self.verify_files_button.configure(state=tk.NORMAL if has_selected_files else tk.DISABLED)
 
     def _refresh_selected_files(self) -> None:
         self.files_listbox.delete(0, tk.END)
@@ -500,6 +516,27 @@ class EncryptorApp:
             delete_original,
         )
 
+    def sign_selected_files(self) -> None:
+        if not self.state.selected_files:
+            messagebox.showerror("Sin archivos", "Seleccione uno o más archivos para firmar.")
+            return
+
+        signing_fpr = self._selected_signing_fingerprint()
+        if not signing_fpr:
+            messagebox.showerror("Sin clave de firma", "Seleccione una clave de firma válida.")
+            return
+
+        passphrase = self._ask_passphrase("Introduce la passphrase para firmar:")
+        if passphrase is None:
+            return
+
+        self._require_thread(
+            self._sign_files_worker,
+            list(self.state.selected_files),
+            signing_fpr,
+            passphrase,
+        )
+
     def decrypt_selected_files(self) -> None:
         if not self.state.selected_files:
             messagebox.showerror("Sin archivos", "Seleccione uno o más archivos para descifrar.")
@@ -512,6 +549,16 @@ class EncryptorApp:
             self._decrypt_files_worker,
             list(self.state.selected_files),
             passphrase,
+        )
+
+    def verify_selected_files(self) -> None:
+        if not self.state.selected_files:
+            messagebox.showerror("Sin archivos", "Seleccione uno o más archivos para verificar.")
+            return
+
+        self._require_thread(
+            self._verify_files_worker,
+            list(self.state.selected_files),
         )
 
     def encrypt_text(self) -> None:
@@ -542,6 +589,33 @@ class EncryptorApp:
             self._append_log(f"Error al cifrar texto: {err.strip() or 'desconocido'}")
             messagebox.showerror("Error", "No se pudo cifrar el texto. Consulta el registro para más detalles.")
 
+    def sign_text(self) -> None:
+        text = self.text_input.get("1.0", tk.END).strip()
+        if not text:
+            messagebox.showerror("Sin texto", "Introduce texto a firmar.")
+            return
+
+        signing_fpr = self._selected_signing_fingerprint()
+        if not signing_fpr:
+            messagebox.showerror("Sin clave de firma", "Seleccione una clave de firma válida.")
+            return
+
+        passphrase = self._ask_passphrase("Introduce la passphrase para firmar:")
+        if passphrase is None:
+            return
+
+        self._set_status("Estado: firmando texto...", indeterminate=True)
+        code, out, err = self.state.gpg.sign_text(text, signing_fpr, passphrase or None)
+        self._set_status("Estado: inactivo", indeterminate=False)
+        if code == 0 and out:
+            self.encrypted_output.delete("1.0", tk.END)
+            self.encrypted_output.insert(tk.END, out)
+            display = self.signing_key_var.get()
+            self._append_log(f"Texto firmado con {display}")
+        else:
+            self._append_log(f"Error al firmar texto: {err.strip() or 'desconocido'}")
+            messagebox.showerror("Error", "No se pudo firmar el texto. Consulta el registro para más detalles.")
+
     def decrypt_text(self) -> None:
         armored = self.encrypted_output.get("1.0", tk.END).strip()
         if not armored:
@@ -561,6 +635,27 @@ class EncryptorApp:
         else:
             self._append_log(f"Error al descifrar texto: {err.strip() or 'desconocido'}")
             messagebox.showerror("Error", "No se pudo descifrar el texto. Consulta el registro para más detalles.")
+
+    def verify_text(self) -> None:
+        signed_text = self.encrypted_output.get("1.0", tk.END).strip()
+        if not signed_text:
+            messagebox.showerror("Sin datos", "Introduce texto firmado a verificar.")
+            return
+
+        self._set_status("Estado: verificando firma...", indeterminate=True)
+        code, out, err = self.state.gpg.verify_text(signed_text)
+        self._set_status("Estado: inactivo", indeterminate=False)
+
+        if code == 0:
+            self.decrypted_output.delete("1.0", tk.END)
+            self.decrypted_output.insert(tk.END, out)
+            message = err.strip() or "Firma verificada correctamente."
+            self._append_log(f"Firma verificada: {message}")
+            messagebox.showinfo("Firma", message)
+        else:
+            message = err.strip() or "No se pudo verificar la firma."
+            self._append_log(f"Error al verificar firma: {message}")
+            messagebox.showerror("Firma", "No se pudo verificar la firma. Consulta el registro para más detalles.")
 
     def import_public_key(self) -> None:
         file_path = filedialog.askopenfilename(
@@ -729,6 +824,43 @@ class EncryptorApp:
 
         self._queue.put(("status", "Estado: cifrado finalizado"))
 
+    def _sign_files_worker(
+        self,
+        files: Sequence[Path],
+        signing_fpr: str,
+        passphrase: Optional[str],
+    ) -> None:
+        self._queue.put(("status", "Estado: firmando archivos..."))
+        normalized: List[Path] = [Path(path) for path in files]
+        self._queue.put(("progress_max", str(len(normalized) or 1)))
+        passphrase_arg = passphrase if passphrase else None
+
+        for raw_path in normalized:
+            path = Path(raw_path)
+            if not path.exists() or not path.is_file():
+                self._queue.put(("log", f"No se encontró el archivo: {path}"))
+                self._queue.put(("progress_step", "1"))
+                continue
+            if path.suffix in {".asc", ".sig"}:
+                self._queue.put(("log", f"Omitido (parece una firma): {path}"))
+                self._queue.put(("progress_step", "1"))
+                continue
+
+            signature_path = path.with_suffix(path.suffix + ".asc")
+            code, err = self.state.gpg.sign_file(
+                str(path),
+                str(signature_path),
+                signing_fpr,
+                passphrase_arg,
+            )
+            if code == 0:
+                self._queue.put(("log", f"Firmado: {path} → {signature_path}"))
+            else:
+                self._queue.put(("log", f"Error firmando {path}: {err.strip()}"))
+            self._queue.put(("progress_step", "1"))
+
+        self._queue.put(("status", "Estado: firmado finalizado"))
+
     def _decrypt_files_worker(self, files: Sequence[Path], passphrase: str) -> None:
         self._queue.put(("status", "Estado: descifrando archivos..."))
         normalized: List[Path] = [Path(path) for path in files]
@@ -759,6 +891,51 @@ class EncryptorApp:
             self._queue.put(("progress_step", "1"))
 
         self._queue.put(("status", "Estado: descifrado finalizado"))
+
+    def _verify_files_worker(self, files: Sequence[Path]) -> None:
+        self._queue.put(("status", "Estado: verificando firmas..."))
+        normalized: List[Path] = [Path(path) for path in files]
+        self._queue.put(("progress_max", str(len(normalized) or 1)))
+
+        for raw_path in normalized:
+            path = Path(raw_path)
+            if not path.exists() or not path.is_file():
+                self._queue.put(("log", f"No se encontró el archivo: {path}"))
+                self._queue.put(("progress_step", "1"))
+                continue
+
+            signature_path: Optional[Path]
+            data_path: Optional[Path]
+
+            if path.suffix in {".asc", ".sig"}:
+                signature_path = path
+                data_path = path.with_suffix("")
+                if not data_path.exists():
+                    self._queue.put(("log", f"No se encontró el original para {path}"))
+                    self._queue.put(("progress_step", "1"))
+                    continue
+            else:
+                data_path = path
+                asc_candidate = path.with_suffix(path.suffix + ".asc")
+                sig_candidate = path.with_suffix(path.suffix + ".sig")
+                if asc_candidate.exists():
+                    signature_path = asc_candidate
+                elif sig_candidate.exists():
+                    signature_path = sig_candidate
+                else:
+                    self._queue.put(("log", f"No se encontró firma para {path}"))
+                    self._queue.put(("progress_step", "1"))
+                    continue
+
+            code, err = self.state.gpg.verify_file(str(signature_path), str(data_path))
+            message = " ".join(line.strip() for line in err.splitlines() if line.strip()) or "Firma verificada correctamente"
+            if code == 0:
+                self._queue.put(("log", f"Firma verificada para {data_path}: {message}"))
+            else:
+                self._queue.put(("log", f"Error verificando {data_path}: {message}"))
+            self._queue.put(("progress_step", "1"))
+
+        self._queue.put(("status", "Estado: verificación finalizada"))
 
 
 __all__ = ["EncryptorApp"]

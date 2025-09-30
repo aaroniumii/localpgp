@@ -123,6 +123,58 @@ class GPGHandler:
             process.stderr.decode(errors="replace"),
         )
 
+    def sign_text(
+        self,
+        text: str,
+        signing_fpr: str,
+        passphrase: Optional[str],
+        clearsign: bool = True,
+    ) -> Tuple[int, str, str]:
+        args = [
+            self.gpg_binary,
+            "--batch",
+            "--yes",
+            "--pinentry-mode",
+            "loopback",
+            "--armor",
+            "--default-key",
+            signing_fpr,
+        ]
+
+        if clearsign:
+            args.append("--clearsign")
+        else:
+            args.append("--sign")
+
+        if passphrase is not None:
+            args.extend(["--passphrase", passphrase])
+
+        process = self._run(args, stdin=text.encode())
+        return (
+            process.returncode,
+            process.stdout.decode(errors="replace"),
+            process.stderr.decode(errors="replace"),
+        )
+
+    def verify_text(self, signed_text: str) -> Tuple[int, str, str]:
+        args = [
+            self.gpg_binary,
+            "--batch",
+            "--yes",
+            "--trust-model",
+            "always",
+            "--pinentry-mode",
+            "loopback",
+            "--decrypt",
+        ]
+
+        process = self._run(args, stdin=signed_text.encode())
+        return (
+            process.returncode,
+            process.stdout.decode(errors="replace"),
+            process.stderr.decode(errors="replace"),
+        )
+
     # ------------------------------------------------------------------
     # Operaciones con archivos
     # ------------------------------------------------------------------
@@ -174,6 +226,56 @@ class GPGHandler:
         if passphrase is not None:
             args.extend(["--passphrase", passphrase])
         args.extend(["-o", dst_path, src_path])
+
+        process = self._run(args)
+        return process.returncode, process.stderr.decode(errors="replace")
+
+    def sign_file(
+        self,
+        src_path: str,
+        dst_path: str,
+        signing_fpr: str,
+        passphrase: Optional[str],
+        detach: bool = True,
+    ) -> Tuple[int, str]:
+        args: List[str] = [
+            self.gpg_binary,
+            "--batch",
+            "--yes",
+            "--pinentry-mode",
+            "loopback",
+            "--armor",
+            "--default-key",
+            signing_fpr,
+            "-o",
+            dst_path,
+        ]
+
+        if detach:
+            args.append("--detach-sign")
+        else:
+            args.append("--sign")
+
+        if passphrase is not None:
+            args.extend(["--passphrase", passphrase])
+
+        args.append(src_path)
+
+        process = self._run(args)
+        return process.returncode, process.stderr.decode(errors="replace")
+
+    def verify_file(self, signature_path: str, data_path: Optional[str] = None) -> Tuple[int, str]:
+        args = [
+            self.gpg_binary,
+            "--batch",
+            "--yes",
+            "--pinentry-mode",
+            "loopback",
+            "--verify",
+            signature_path,
+        ]
+        if data_path is not None:
+            args.append(data_path)
 
         process = self._run(args)
         return process.returncode, process.stderr.decode(errors="replace")
